@@ -1,4 +1,4 @@
-import { PubSubEngine } from "graphql-subscriptions";
+import { PubSubEngine } from 'graphql-subscriptions';
 import {
   Consumer,
   Kafka,
@@ -7,15 +7,15 @@ import {
   IHeaders,
   KafkaMessage,
   ConsumerConfig,
-} from "kafkajs";
-import { PubSubAsyncIterator } from "./pubsub-async-iterator";
+} from 'kafkajs';
+import { PubSubAsyncIterator } from './pubsub-async-iterator';
 
 interface KafkaPubSubInput {
   kafka: Kafka;
   topic: string;
-  groupIdPrefix: string;
+  groupIdPrefix?: string;
   producerConfig?: ProducerConfig;
-  consumerConfig?: Omit<ConsumerConfig, "groupId">;
+  consumerConfig?: Omit<ConsumerConfig, 'groupId'> & Partial<Pick<ConsumerConfig, 'groupId'>>;
 }
 
 export type MessageHandler = (msg: KafkaMessage) => any;
@@ -63,11 +63,19 @@ export class KafkaPubSub implements PubSubEngine {
     this.channelSubscriptions = {};
     this.topic = topic;
     this.producer = this.client.producer(producerConfig);
-    this.consumer = this.client.consumer({
-      ...consumerConfig,
-      // we need all consumers listening to all messages
-      groupId: `${groupIdPrefix}-${Math.ceil(Math.random() * 9999)}`,
-    });
+
+    if (!groupIdPrefix && !consumerConfig.groupId) {
+      throw new Error('Either groupIdPrefix or consumerConfig.groupId must be provided');
+    }
+
+    this.consumer = this.client.consumer(
+      groupIdPrefix
+        ? {
+            ...consumerConfig,
+            groupId: `${groupIdPrefix}-${Math.ceil(Math.random() * 9999)}`,
+          }
+        : (consumerConfig as ConsumerConfig),
+    );
   }
 
   /**
@@ -81,7 +89,7 @@ export class KafkaPubSub implements PubSubEngine {
     channel: string,
     payload: string | Buffer,
     headers?: IHeaders,
-    sendOptions?: object
+    sendOptions?: object,
   ): Promise<void> {
     await this.producer.send({
       messages: [
@@ -98,24 +106,18 @@ export class KafkaPubSub implements PubSubEngine {
     });
   }
 
-  public async subscribe(
-    channel: string,
-    onMessage: MessageHandler,
-    _?: any
-  ): Promise<number> {
+  public async subscribe(channel: string, onMessage: MessageHandler, _?: any): Promise<number> {
     const index = Object.keys(this.subscriptionMap).length;
     this.subscriptionMap[index] = [channel, onMessage];
-    this.channelSubscriptions[channel] = (
-      this.channelSubscriptions[channel] || []
-    ).concat(index);
+    this.channelSubscriptions[channel] = (this.channelSubscriptions[channel] || []).concat(index);
     return index;
   }
 
   public unsubscribe(index: number) {
     const [channel] = this.subscriptionMap[index];
-    this.channelSubscriptions[channel] = this.channelSubscriptions[
-      channel
-    ].filter((subId) => subId !== index);
+    this.channelSubscriptions[channel] = this.channelSubscriptions[channel].filter(
+      (subId) => subId !== index,
+    );
   }
 
   public asyncIterator<T>(triggers: string | string[]): AsyncIterator<T> {
